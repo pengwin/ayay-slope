@@ -1,0 +1,81 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.opensdf
+*.sdf
+*.vssscc
+*.vspscc
+*.vsp
+*.vspx
+*.psess
+*.tlog
+*.trx
+*.log
+
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.idb
+*.lib
+*.obj
+*.winmd
+*.appx
+*.appxbundle
+*.appxsym
+*.xap
+*.apk
+*.ipa
+*.aab
+
+# Package directories
+packages/
+nugets/
+
+# NuGet
+*.nupkg
+*.snupkg
+*.lock.json # For .NET Core/5+ projects
+project.assets.json # For .NET Core/5+ projects
+
+# Resharper
+*.DotSettings
+_ReSharper.*/
+
+# Other files
+*.bak
+*.orig
+*.swp
+*.swo
+*.tmp
+*.zip
+*.rar
+*.7z
+*.gz
+*.tar
+*.iso
+*.vhd
+*.vhdx
+*.vmx
+*.vmdk
+
+# Node.js (if applicable)
+node_modules/
+
+# DotNet Core
+.config/
+.idea/
+.vscode/
+
+# Editor files
+*~
+.#*
+*.sublime-workspace
+.DS_Store
+Thumbs.db
