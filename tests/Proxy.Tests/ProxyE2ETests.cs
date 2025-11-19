@@ -3,10 +3,12 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text.Json;
+using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -74,6 +76,47 @@ public sealed class ProxyE2ETests
 
         Assert.Contains(responses, message => message.Contains("backend-a", StringComparison.Ordinal));
         Assert.Contains(responses, message => message.Contains("backend-b", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Http1_grpc_spoofing_is_rejected()
+    {
+        await using var grpcBackend = await StartGrpcBackendAsync("strict");
+        await using var httpBackend = await StartHttpBackendAsync();
+
+        var proxyConfig = BuildConfig(httpBackend.Address, new[] { grpcBackend.Address });
+        await using var proxy = await StartProxyAsync(proxyConfig);
+
+        using var client = CreateHttpClient(proxy.Address);
+        var request = new HttpRequestMessage(HttpMethod.Post, "/proxy.tests.Greeter/SayHello")
+        {
+            Content = new ByteArrayContent(Array.Empty<byte>())
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/grpc");
+        request.Headers.TE.Add(new TransferCodingWithQualityHeaderValue("trailers"));
+
+        var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Grpc_calls_succeed_without_tls_using_http2()
+    {
+        await using var grpcBackend = await StartGrpcBackendAsync("plain");
+        await using var httpBackend = await StartHttpBackendAsync();
+
+        var proxyConfig = BuildConfig(httpBackend.Address, new[] { grpcBackend.Address });
+        await using var proxy = await StartProxyAsync(proxyConfig, enableTls: false);
+
+        var grpcAddress = new Uri(proxy.Address, "/grpc/");
+        using var channel = GrpcChannel.ForAddress(grpcAddress, new GrpcChannelOptions
+        {
+            HttpHandler = CreateGrpcHandler(useTls: false)
+        });
+
+        var client = new Greeter.GreeterClient(channel);
+        var reply = await client.SayHelloAsync(new HelloRequest { Name = "plaintext" });
+        Assert.Contains("plain", reply.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -154,20 +197,22 @@ public sealed class ProxyE2ETests
         return new RunningHost(app, new Uri($"http://127.0.0.1:{port}"));
     }
 
-    private static async Task<RunningHost> StartProxyAsync(ProxyConfig config)
+    private static async Task<RunningHost> StartProxyAsync(ProxyConfig config, bool enableTls = true)
     {
         var port = PortAllocator.GetFreePort();
         var builder = WebApplication.CreateBuilder();
         ProxyHost.ConfigureServices(builder, new ProxyHostOptions
         {
             Address = IPAddress.Loopback,
-            Port = port
+            Port = port,
+            EnableTls = enableTls
         }, config);
 
         var app = builder.Build();
         ProxyHost.ConfigurePipeline(app);
         await app.StartAsync();
-        return new RunningHost(app, new Uri($"https://127.0.0.1:{port}"));
+        var scheme = enableTls ? "https" : "http";
+        return new RunningHost(app, new Uri($"{scheme}://127.0.0.1:{port}"));
     }
 
     private static HttpClient CreateHttpClient(Uri baseAddress)
@@ -180,18 +225,22 @@ public sealed class ProxyE2ETests
         return new HttpClient(handler) { BaseAddress = baseAddress };
     }
 
-    private static HttpMessageHandler CreateGrpcHandler()
+    private static HttpMessageHandler CreateGrpcHandler(bool useTls = true)
     {
         var handler = new SocketsHttpHandler
         {
             AutomaticDecompression = DecompressionMethods.None
         };
 
-        var sslOptions = handler.SslOptions;
-        sslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
-        sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
-        sslOptions.ApplicationProtocols ??= new List<SslApplicationProtocol>();
-        sslOptions.ApplicationProtocols.Add(SslApplicationProtocol.Http2);
+        if (useTls)
+        {
+            var sslOptions = handler.SslOptions;
+            sslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            sslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+            sslOptions.ApplicationProtocols ??= new List<SslApplicationProtocol>();
+            sslOptions.ApplicationProtocols.Add(SslApplicationProtocol.Http2);
+        }
+
         return handler;
     }
 

@@ -1,4 +1,3 @@
-using System.Linq;
 using Microsoft.AspNetCore.Http;
 using Proxy.Configuration;
 
@@ -7,12 +6,10 @@ namespace Proxy.Routing;
 public sealed class RouteMatcher
 {
     private readonly IProxyConfigProvider _configProvider;
-    private readonly RouteConfig? _grpcRoute;
 
     public RouteMatcher(IProxyConfigProvider configProvider)
     {
         _configProvider = configProvider;
-        _grpcRoute = configProvider.Config.Routes.FirstOrDefault(route => route.Kind == ProxyRouteKind.Grpc);
     }
 
     public RouteMatchResult? Match(PathString path)
@@ -27,17 +24,6 @@ public sealed class RouteMatcher
         }
 
         return null;
-    }
-
-    public RouteMatchResult? MatchGrpcFallback(PathString path)
-    {
-        if (_grpcRoute is null)
-        {
-            return null;
-        }
-
-        var downstream = NormalizePath(path);
-        return new RouteMatchResult(_grpcRoute, path, downstream);
     }
 
     private static PathString NormalizePath(PathString path)

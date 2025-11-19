@@ -14,6 +14,8 @@ using Proxy.LoadBalancing;
 using Proxy.Routing;
 using Proxy.Infrastructure;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
+using System.Linq;
 
 namespace Proxy;
 
@@ -46,14 +48,16 @@ public static class ProxyHost
 
         builder.WebHost.ConfigureKestrel(options =>
         {
+            var endpointProtocols = enableTls ? HttpProtocols.Http1AndHttp2 : HttpProtocols.Http2;
+
             options.ConfigureEndpointDefaults(listenOptions =>
             {
-                listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+                listenOptions.Protocols = endpointProtocols;
             });
 
             options.Listen(listenAddress, listenPort, listenOptions =>
             {
-                listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+                listenOptions.Protocols = endpointProtocols;
                 if (enableTls && certificate is not null)
                 {
                     listenOptions.UseHttps(certificate);
@@ -65,6 +69,7 @@ public static class ProxyHost
             {
                 client.DefaultRequestVersion = HttpVersion.Version20;
                 client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+                client.Timeout = Timeout.InfiniteTimeSpan;
             })
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
@@ -101,8 +106,14 @@ public static class ProxyHost
             var loadBalancer = context.RequestServices.GetRequiredService<ILoadBalancer>();
             var executor = context.RequestServices.GetRequiredService<ProxyRequestExecutor>();
 
-            var match = matcher.Match(context.Request.Path) ??
-                        (IsGrpcRequest(context.Request) ? matcher.MatchGrpcFallback(context.Request.Path) : null);
+            var grpcRoute = configProvider.Config.Routes.FirstOrDefault(route => route.Kind == ProxyRouteKind.Grpc);
+            if (grpcRoute is not null && IsGrpcRequest(context.Request) &&
+                !context.Request.Path.StartsWithSegments(grpcRoute.PathPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                context.Request.Path = grpcRoute.PathPrefix.Add(context.Request.Path);
+            }
+
+            var match = matcher.Match(context.Request.Path);
             if (match is null)
             {
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -126,6 +137,11 @@ public static class ProxyHost
 
     private static bool IsGrpcRequest(HttpRequest request)
     {
+        if (!string.Equals(request.Protocol, HttpProtocol.Http2, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         if (request.ContentType is null)
         {
             return false;
